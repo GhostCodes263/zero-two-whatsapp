@@ -2,14 +2,14 @@ import config from "./config/config.js";
 import logger from "./core/logger.js";
 import events from "./core/events.js";
 import whatsappClient from "./whatsapp/client.js";
+import botHandler from "./bot/handler.js";
 
 let isBooted = false;
 let shutdownStarted = false;
 
 function registerEventHandlers() {
   /*
-   * Prevent this function from registering
-   * the same application listeners more than once.
+   * Prevent duplicate application listeners.
    */
   if (isBooted) {
     logger.debug(
@@ -55,6 +55,9 @@ function registerEventHandlers() {
 
   /*
    * Text-only WhatsApp messages.
+   *
+   * The actual bot logic is handled by
+   * botHandler.
    */
   events.on(
     "whatsapp.text",
@@ -70,12 +73,7 @@ function registerEventHandlers() {
   );
 
   logger.debug(
-    {
-      listeners:
-        events.getListenerStats?.() ||
-        {}
-    },
-    "Zero Two event handlers registered."
+    "Zero Two application event handlers registered."
   );
 }
 
@@ -88,7 +86,7 @@ function handleWhatsAppReady({
       name: user?.name,
       lid: user?.lid
     },
-    "Zero Two is ready for messages."
+    "Zero Two application is ready."
   );
 }
 
@@ -115,7 +113,7 @@ function handleWhatsAppMessages({
         messages?.length || 0,
       type
     },
-    "WhatsApp message event received."
+    "WhatsApp message batch received."
   );
 }
 
@@ -136,22 +134,26 @@ function handleWhatsAppMessage({
       text,
       messageType
     },
-    "WhatsApp message received by Zero Two."
+    "Zero Two received normalized WhatsApp message."
   );
 }
 
 function handleWhatsAppText({
   chatId,
   sender,
+  isGroup,
+  pushName,
   text
 }) {
   logger.info(
     {
       chatId,
       sender,
+      isGroup,
+      pushName,
       text
     },
-    "Incoming WhatsApp text."
+    "Zero Two received incoming text."
   );
 }
 
@@ -171,15 +173,20 @@ function handleGroupParticipants(
 
 async function main() {
   /*
-   * Register application event handlers
-   * before starting WhatsApp.
+   * Register application listeners first.
    */
   registerEventHandlers();
+
+  /*
+   * Register the actual bot logic.
+   */
+  botHandler.register();
 
   logger.info(
     {
       bot: config.bot.name,
-      environment: config.nodeEnv
+      environment:
+        config.nodeEnv
     },
     "Starting Zero Two..."
   );
@@ -188,6 +195,9 @@ async function main() {
     "Core configuration loaded."
   );
 
+  /*
+   * Start WhatsApp.
+   */
   await whatsappClient.initialize();
 
   logger.info(
@@ -195,10 +205,12 @@ async function main() {
   );
 }
 
-async function shutdown(signal) {
+async function shutdown(
+  signal
+) {
   /*
-   * Prevent multiple shutdown handlers from
-   * running at the same time.
+   * Prevent multiple shutdown
+   * handlers from running.
    */
   if (shutdownStarted) {
     return;
