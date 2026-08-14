@@ -92,6 +92,20 @@ class WhatsAppClient {
         );
       }
 
+      /*
+       * WhatsApp socket configuration.
+       *
+       * IMPORTANT:
+       *
+       * fireInitQueries is disabled because the automatic
+       * Baileys initialization queries are timing out with
+       * HTTP 408 after the socket is already connected.
+       *
+       * The bot is still able to receive messages normally.
+       *
+       * History synchronization is also disabled because
+       * Zero Two only needs live incoming messages.
+       */
       const socketOptions = {
         auth: state,
 
@@ -107,11 +121,63 @@ class WhatsAppClient {
           "1.0.0"
         ],
 
+        /*
+         * Keep the WhatsApp account offline unless
+         * the application explicitly changes presence.
+         */
         markOnlineOnConnect: false,
 
-        generateHighQualityLinkPreview: true,
+        /*
+         * We do not need historical chat synchronization
+         * during startup.
+         */
+        syncFullHistory: false,
 
-        shouldSyncHistoryMessage: () => false
+        shouldSyncHistoryMessage: () => false,
+
+        /*
+         * IMPORTANT:
+         *
+         * Disable Baileys automatic initialization queries.
+         *
+         * Without this, the socket connects successfully,
+         * receives messages, and then approximately 60 seconds
+         * later Baileys reports:
+         *
+         *     unexpected error in 'init queries'
+         *     Error: Timed Out
+         *     statusCode: 408
+         *
+         * Live messaging does not require these startup queries.
+         */
+        fireInitQueries: false,
+
+        /*
+         * We don't need automatic high-quality link preview
+         * generation at the WhatsApp transport layer.
+         */
+        generateHighQualityLinkPreview: false,
+
+        /*
+         * Keep the WebSocket alive.
+         */
+        keepAliveIntervalMs: 30000,
+
+        /*
+         * Give the initial WebSocket connection enough time
+         * to establish in Codespaces.
+         */
+        connectTimeoutMs: 30000,
+
+        /*
+         * Retry failed requests with a small delay.
+         */
+        retryRequestDelayMs: 250,
+
+        /*
+         * Maximum message retry attempts.
+         */
+        maxMsgRetryCount: 5
       };
 
       if (version) {
@@ -119,7 +185,9 @@ class WhatsAppClient {
       }
 
       this.socket =
-        makeWASocket(socketOptions);
+        makeWASocket(
+          socketOptions
+        );
 
       this.registerConnectionEvents();
 
@@ -186,18 +254,23 @@ class WhatsAppClient {
           );
 
           console.log("\n");
+
           console.log(
             "=========================================="
           );
+
           console.log(
             "        ZERO TWO WHATSAPP LOGIN"
           );
+
           console.log(
             "=========================================="
           );
+
           console.log(
             "Scan this QR code with WhatsApp:"
           );
+
           console.log("\n");
 
           qrcode.generate(
@@ -317,9 +390,8 @@ class WhatsAppClient {
           /*
            * Security:
            *
-           * Baileys has had a security advisory involving
-           * spoofed messages.upsert events containing a
-           * requestId. Drop those events.
+           * Ignore suspicious messages.upsert events
+           * containing a requestId.
            */
           if (requestId) {
             logger.warn(
@@ -333,9 +405,7 @@ class WhatsAppClient {
           }
 
           /*
-           * We only want newly delivered messages.
-           *
-           * "notify" is the normal incoming-message event.
+           * Only process newly delivered messages.
            */
           if (type !== "notify") {
             logger.debug(
@@ -356,9 +426,8 @@ class WhatsAppClient {
           }
 
           /*
-           * Keep the existing event for backwards
-           * compatibility with code already listening
-           * for whatsapp.messages.
+           * Preserve the existing batch event for
+           * backwards compatibility.
            */
           events.emitBotEvent(
             "whatsapp.messages",
@@ -396,7 +465,7 @@ class WhatsAppClient {
     }
 
     /*
-     * Ignore messages sent by the bot itself.
+     * Ignore messages sent by Zero Two itself.
      */
     if (message.key.fromMe) {
       return;
@@ -420,13 +489,17 @@ class WhatsAppClient {
     }
 
     /*
-     * Prevent accidental duplicate processing.
+     * Prevent duplicate processing.
      */
     const messageId =
       message.key.id;
 
     if (messageId) {
-      if (this.messageIds.has(messageId)) {
+      if (
+        this.messageIds.has(
+          messageId
+        )
+      ) {
         logger.debug(
           {
             messageId
@@ -442,11 +515,17 @@ class WhatsAppClient {
       );
 
       /*
-       * Keep memory bounded.
+       * Keep the in-memory set bounded.
        */
-      if (this.messageIds.size > 5000) {
+      if (
+        this.messageIds.size >
+        5000
+      ) {
         const firstId =
-          this.messageIds.values().next().value;
+          this.messageIds
+            .values()
+            .next()
+            .value;
 
         if (firstId) {
           this.messageIds.delete(
@@ -479,7 +558,8 @@ class WhatsAppClient {
 
       messageId,
 
-      chatId: remoteJid,
+      chatId:
+        remoteJid,
 
       sender,
 
@@ -505,11 +585,16 @@ class WhatsAppClient {
 
     logger.info(
       {
-        chatId: remoteJid,
+        chatId:
+          remoteJid,
+
         sender,
+
         isGroup,
+
         messageType:
           messageText.type,
+
         text:
           messageText.text
       },
@@ -517,11 +602,7 @@ class WhatsAppClient {
     );
 
     /*
-     * Emit the clean message event.
-     *
-     * Future command handlers, AI handlers,
-     * moderation, leveling, etc. should listen
-     * to this event.
+     * Main normalized message event.
      */
     events.emitBotEvent(
       "whatsapp.message",
@@ -529,8 +610,7 @@ class WhatsAppClient {
     );
 
     /*
-     * Also emit a more specific text event when
-     * the incoming message actually contains text.
+     * Text-specific event.
      */
     if (messageText.text) {
       events.emitBotEvent(
@@ -558,7 +638,9 @@ class WhatsAppClient {
       return {
         text:
           content.conversation,
-        type: "conversation"
+
+        type:
+          "conversation"
       };
     }
 
@@ -574,7 +656,9 @@ class WhatsAppClient {
             .extendedTextMessage
             .text ||
           "",
-        type: "extendedTextMessage"
+
+        type:
+          "extendedTextMessage"
       };
     }
 
@@ -590,7 +674,9 @@ class WhatsAppClient {
             .imageMessage
             .caption ||
           "",
-        type: "imageMessage"
+
+        type:
+          "imageMessage"
       };
     }
 
@@ -606,7 +692,9 @@ class WhatsAppClient {
             .videoMessage
             .caption ||
           "",
-        type: "videoMessage"
+
+        type:
+          "videoMessage"
       };
     }
 
@@ -622,12 +710,14 @@ class WhatsAppClient {
             .documentMessage
             .caption ||
           "",
-        type: "documentMessage"
+
+        type:
+          "documentMessage"
       };
     }
 
     /*
-     * Buttons / interactive messages.
+     * Buttons response.
      */
     if (
       content.buttonsResponseMessage
@@ -638,7 +728,9 @@ class WhatsAppClient {
             .buttonsResponseMessage
             .selectedDisplayText ||
           "",
-        type: "buttonsResponseMessage"
+
+        type:
+          "buttonsResponseMessage"
       };
     }
 
@@ -657,7 +749,9 @@ class WhatsAppClient {
             .listResponseMessage
             .description ||
           "",
-        type: "listResponseMessage"
+
+        type:
+          "listResponseMessage"
       };
     }
 
@@ -673,7 +767,9 @@ class WhatsAppClient {
             .templateButtonReplyMessage
             .selectedDisplayText ||
           "",
-        type: "templateButtonReplyMessage"
+
+        type:
+          "templateButtonReplyMessage"
       };
     }
 
@@ -689,7 +785,9 @@ class WhatsAppClient {
             .reactionMessage
             .text ||
           "",
-        type: "reactionMessage"
+
+        type:
+          "reactionMessage"
       };
     }
 
@@ -701,7 +799,9 @@ class WhatsAppClient {
     ) {
       return {
         text: "",
-        type: "pollCreationMessage"
+
+        type:
+          "pollCreationMessage"
       };
     }
 
@@ -713,7 +813,9 @@ class WhatsAppClient {
     ) {
       return {
         text: "",
-        type: "locationMessage"
+
+        type:
+          "locationMessage"
       };
     }
 
@@ -725,7 +827,9 @@ class WhatsAppClient {
     ) {
       return {
         text: "",
-        type: "contactMessage"
+
+        type:
+          "contactMessage"
       };
     }
 
@@ -737,7 +841,9 @@ class WhatsAppClient {
     ) {
       return {
         text: "",
-        type: "stickerMessage"
+
+        type:
+          "stickerMessage"
       };
     }
 
@@ -749,23 +855,24 @@ class WhatsAppClient {
     ) {
       return {
         text: "",
-        type: "audioMessage"
+
+        type:
+          "audioMessage"
       };
     }
 
     /*
-     * Fallback:
-     *
-     * Identify the first available message
-     * property so the rest of the system knows
-     * what arrived.
+     * Fallback.
      */
     const type =
-      Object.keys(content)[0] ||
+      Object.keys(
+        content
+      )[0] ||
       "unknown";
 
     return {
       text: "",
+
       type
     };
   }
@@ -777,8 +884,12 @@ class WhatsAppClient {
         try {
           logger.info(
             {
-              groupId: update.id,
-              action: update.action,
+              groupId:
+                update.id,
+
+              action:
+                update.action,
+
               participants:
                 update.participants
             },
@@ -801,16 +912,24 @@ class WhatsAppClient {
     );
   }
 
-  scheduleReconnect(delay = 5000) {
-    if (!this.shouldReconnect) {
+  scheduleReconnect(
+    delay = 5000
+  ) {
+    if (
+      !this.shouldReconnect
+    ) {
       return;
     }
 
-    if (this.reconnectTimer) {
+    if (
+      this.reconnectTimer
+    ) {
       return;
     }
 
-    if (this.isConnecting) {
+    if (
+      this.isConnecting
+    ) {
       return;
     }
 
@@ -824,9 +943,12 @@ class WhatsAppClient {
     this.reconnectTimer =
       setTimeout(
         async () => {
-          this.reconnectTimer = null;
+          this.reconnectTimer =
+            null;
 
-          if (!this.shouldReconnect) {
+          if (
+            !this.shouldReconnect
+          ) {
             return;
           }
 
@@ -853,56 +975,74 @@ class WhatsAppClient {
   }
 
   async disconnect() {
-    this.shouldReconnect = false;
+    this.shouldReconnect =
+      false;
 
-    if (this.reconnectTimer) {
+    if (
+      this.reconnectTimer
+    ) {
       clearTimeout(
         this.reconnectTimer
       );
 
-      this.reconnectTimer = null;
+      this.reconnectTimer =
+        null;
     }
 
-    if (this.socket) {
-      try {
-        logger.info(
-          "Stopping WhatsApp client..."
-        );
-
-        /*
-         * IMPORTANT:
-         *
-         * Do NOT call socket.logout() here.
-         *
-         * logout() intentionally logs the WhatsApp
-         * account out and can force another pairing.
-         *
-         * end() simply closes this socket.
-         */
-        this.socket.end(
-          new Error(
-            "Zero Two shutting down."
-          )
-        );
-      } catch (error) {
-        logger.warn(
-          {
-            error: error.message
-          },
-          "Error while stopping WhatsApp client."
-        );
-      }
-    }
+    const socket =
+      this.socket;
 
     this.socket = null;
 
-    this.isConnected = false;
+    this.isConnected =
+      false;
 
-    this.isConnecting = false;
+    this.isConnecting =
+      false;
 
-    logger.info(
-      "WhatsApp client disconnected."
-    );
+    if (!socket) {
+      logger.info(
+        "WhatsApp client disconnected."
+      );
+
+      return;
+    }
+
+    try {
+      logger.info(
+        "Stopping WhatsApp client..."
+      );
+
+      /*
+       * Do NOT call socket.logout().
+       *
+       * logout() removes the WhatsApp session.
+       *
+       * end() only closes the current socket.
+       *
+       * We intentionally do not pass an Error object here
+       * because doing so causes Baileys to log:
+       *
+       *     connection errored
+       *
+       * with "Zero Two shutting down."
+       *
+       * The shutdown itself is expected.
+       */
+      socket.end();
+
+      logger.info(
+        "WhatsApp client disconnected."
+      );
+    } catch (error) {
+      logger.warn(
+        {
+          error:
+            error.message
+        },
+        "Error while stopping WhatsApp client."
+      );
+    }
   }
 
   async sendMessage(
@@ -937,6 +1077,15 @@ class WhatsAppClient {
     text,
     options = {}
   ) {
+    if (
+      typeof text !==
+      "string"
+    ) {
+      throw new Error(
+        "WhatsApp message text must be a string."
+      );
+    }
+
     return this.sendMessage(
       jid,
       {
