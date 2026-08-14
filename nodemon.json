@@ -1,0 +1,15 @@
+{
+  "watch": [
+    "src"
+  ],
+  "ignore": [
+    "auth_info/**",
+    "data/**",
+    "node_modules/**",
+    ".git/**"
+  ],
+  "ext": "js,mjs,cjs,json",
+  "exec": "node src/index.js",
+  "signal": "SIGTERM",
+  "delay": "500"
+}
