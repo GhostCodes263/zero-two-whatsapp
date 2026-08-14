@@ -1,6 +1,11 @@
 import logger from "../core/logger.js";
 import events from "../core/events.js";
+import config from "../config/config.js";
+import commandRouter from "./router.js";
 import whatsappClient from "../whatsapp/client.js";
+import zeroTwoStyle from "./style.js";
+import groq from "../ai/groq.js";
+import memory from "../ai/memory.js";
 
 class BotHandler {
   constructor() {
@@ -21,9 +26,16 @@ class BotHandler {
     events.on(
       "whatsapp.text",
       async (message) => {
-        await this.handleTextMessage(
-          message
-        );
+        try {
+          await this.handleTextMessage(message);
+        } catch (error) {
+          logger.error(
+            {
+              error
+            },
+            "Unhandled error while processing WhatsApp message."
+          );
+        }
       }
     );
 
@@ -53,8 +65,7 @@ class BotHandler {
       return;
     }
 
-    const cleanText =
-      text.trim();
+    const cleanText = text.trim();
 
     if (!cleanText) {
       return;
@@ -71,102 +82,113 @@ class BotHandler {
       "Zero Two is processing message."
     );
 
-    const normalizedText =
-      cleanText.toLowerCase();
+    /*
+     * Commands
+     *
+     * Commands always take priority over normal conversation.
+     */
+    if (cleanText.startsWith(".")) {
+      try {
+        const handled = await commandRouter.handle({
+          ...message,
+          text: cleanText,
+          reply: this.sendReply.bind(this)
+        });
+
+        if (handled) {
+          logger.debug(
+            {
+              chatId,
+              text: cleanText
+            },
+            "Bot command handled successfully."
+          );
+
+          return;
+        }
+
+        await this.sendReply(
+          chatId,
+          zeroTwoStyle.unknownCommand()
+        );
+
+        return;
+      } catch (error) {
+        logger.error(
+          {
+            chatId,
+            text: cleanText,
+            error
+          },
+          "Failed to process bot command."
+        );
+
+        await this.sendReply(
+          chatId,
+          zeroTwoStyle.error()
+        );
+
+        return;
+      }
+    }
 
     /*
      * Basic greeting responses.
+     *
+     * Greetings use AI when enabled so Zero Two
+     * can respond naturally while remembering context.
      */
-    if (
+    const normalizedText =
+      cleanText.toLowerCase();
+
+    const isGreeting =
       normalizedText === "hi" ||
       normalizedText === "hie" ||
       normalizedText === "hello" ||
       normalizedText === "hey" ||
       normalizedText === "hey zero two" ||
       normalizedText === "hi zero two" ||
-      normalizedText === "hello zero two"
-    ) {
+      normalizedText === "hello zero two";
+
+    if (isGreeting) {
+      if (config.features.ai) {
+        const handledByAI =
+          await this.handleAIMessage(
+            chatId,
+            cleanText
+          );
+
+        if (handledByAI) {
+          return;
+        }
+      }
+
       await this.sendReply(
         chatId,
-        this.getGreeting(pushName)
+        zeroTwoStyle.greeting(pushName)
       );
 
       return;
     }
 
     /*
-     * Bot status command.
-     */
-    if (
-      normalizedText ===
-      ".ping"
-    ) {
-      await this.sendReply(
-        chatId,
-        "🏓 Pong!\n\nZero Two is online and connected to WhatsApp."
-      );
-
-      return;
-    }
-
-    /*
-     * Help command.
-     */
-    if (
-      normalizedText ===
-        ".help" ||
-      normalizedText ===
-        "help"
-    ) {
-      await this.sendReply(
-        chatId,
-        [
-          "🤖 *Zero Two*",
-          "",
-          "I'm online and ready.",
-          "",
-          "Available commands:",
-          "• .ping — Check if I'm online",
-          "• .help — Show this help",
-          "",
-          "More features are coming."
-        ].join("\n")
-      );
-
-      return;
-    }
-
-    /*
-     * Simple identity command.
-     */
-    if (
-      normalizedText ===
-        ".bot" ||
-      normalizedText ===
-        ".about"
-    ) {
-      await this.sendReply(
-        chatId,
-        [
-          "🤖 *Zero Two*",
-          "",
-          "WhatsApp assistant",
-          "Status: Online 🟢",
-          "",
-          "More features are being built."
-        ].join("\n")
-      );
-
-      return;
-    }
-
-    /*
-     * Unknown messages currently do nothing.
+     * Natural AI conversation.
      *
-     * This is intentional.
-     *
-     * Later, this section will pass the message
-     * to the command router / AI handler.
+     * Any normal message can be answered by Zero Two
+     * when the AI feature is enabled.
+     */
+    if (config.features.ai) {
+      await this.handleAIMessage(
+        chatId,
+        cleanText
+      );
+
+      return;
+    }
+
+    /*
+     * Unknown normal messages currently do nothing
+     * when AI is disabled.
      */
     logger.debug(
       {
@@ -178,30 +200,70 @@ class BotHandler {
     );
   }
 
-  getGreeting(pushName) {
-    const name =
-      pushName ||
-      "there";
+  async handleAIMessage(chatId, prompt) {
+    try {
 
-    return [
-      `Hey ${name}! 👋`,
-      "",
-      "I'm Zero Two.",
-      "I'm online and ready for messages. 🤖",
-      "",
-      "Send *.help* to see what I can do."
-    ].join("\n");
+      const history =
+        memory.getHistory(chatId);
+
+      const messages = [
+        ...history,
+        {
+          role: "user",
+          content: prompt
+        }
+      ];
+
+      const answer =
+        await groq.ask(messages);
+
+      memory.addMessage(
+        chatId,
+        "user",
+        prompt
+      );
+
+      memory.addMessage(
+        chatId,
+        "assistant",
+        answer
+      );
+
+      await this.sendReply(
+        chatId,
+        zeroTwoStyle.ai(answer)
+      );
+
+      return true;
+    } catch (error) {
+      logger.error(
+        {
+          chatId,
+          prompt,
+          error
+        },
+        "AI response failed."
+      );
+
+      /*
+       * AI failures should still feel like Zero Two,
+       * not like a raw technical error.
+       */
+      await this.sendReply(
+        chatId,
+        zeroTwoStyle.aiError()
+      );
+
+      return false;
+    }
   }
 
-  async sendReply(
-    chatId,
-    text
-  ) {
+  async sendReply(chatId, text) {
     try {
-      if (
-        !whatsappClient.getStatus()
-          .connected
-      ) {
+      const status =
+        whatsappClient.getStatus();
+
+      if (!status?.connected) {
         logger.warn(
           {
             chatId
@@ -209,7 +271,7 @@ class BotHandler {
           "Cannot send bot reply because WhatsApp is not connected."
         );
 
-        return;
+        return false;
       }
 
       await whatsappClient.sendText(
@@ -224,6 +286,8 @@ class BotHandler {
         },
         "Zero Two sent WhatsApp reply."
       );
+
+      return true;
     } catch (error) {
       logger.error(
         {
@@ -232,6 +296,8 @@ class BotHandler {
         },
         "Failed to send Zero Two WhatsApp reply."
       );
+
+      return false;
     }
   }
 }

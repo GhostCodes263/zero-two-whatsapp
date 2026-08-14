@@ -1,9 +1,21 @@
 import config from "../config/config.js";
 import logger from "../core/logger.js";
+import commands from "./commands/index.js";
 
 class CommandRouter {
   constructor() {
     this.commands = new Map();
+
+    this.registerMany(
+      commands
+    );
+
+    logger.info(
+      {
+        commands: this.getCommandNames()
+      },
+      "Bot commands registered."
+    );
   }
 
   register(command) {
@@ -27,6 +39,14 @@ class CommandRouter {
         command
       );
     }
+
+    logger.debug(
+      {
+        command: command.name,
+        aliases: command.aliases || []
+      },
+      "Bot command registered."
+    );
   }
 
   registerMany(commands = []) {
@@ -40,14 +60,25 @@ class CommandRouter {
   }
 
   parse(text) {
-    const prefix = this.getPrefix();
+    if (
+      typeof text !== "string"
+    ) {
+      return null;
+    }
 
-    if (!text.startsWith(prefix)) {
+    const prefix =
+      this.getPrefix();
+
+    if (
+      !text.startsWith(prefix)
+    ) {
       return null;
     }
 
     const withoutPrefix =
-      text.slice(prefix.length).trim();
+      text
+        .slice(prefix.length)
+        .trim();
 
     if (!withoutPrefix) {
       return null;
@@ -57,7 +88,9 @@ class CommandRouter {
       withoutPrefix.split(/\s+/);
 
     const name =
-      parts.shift()?.toLowerCase();
+      parts
+        .shift()
+        ?.toLowerCase();
 
     if (!name) {
       return null;
@@ -72,15 +105,23 @@ class CommandRouter {
   }
 
   async handle(message) {
+    if (!message) {
+      return false;
+    }
+
     const parsed =
-      this.parse(message.text);
+      this.parse(
+        message.text
+      );
 
     if (!parsed) {
       return false;
     }
 
     const command =
-      this.commands.get(parsed.name);
+      this.commands.get(
+        parsed.name
+      );
 
     if (!command) {
       logger.debug(
@@ -95,11 +136,28 @@ class CommandRouter {
     }
 
     try {
+      logger.info(
+        {
+          chatId: message.chatId,
+          command: parsed.name,
+          args: parsed.args
+        },
+        "Executing bot command."
+      );
+
       await command.execute({
         ...message,
         ...parsed,
         router: this
       });
+
+      logger.debug(
+        {
+          chatId: message.chatId,
+          command: parsed.name
+        },
+        "Bot command completed."
+      );
     } catch (error) {
       logger.error(
         {
@@ -121,6 +179,12 @@ class CommandRouter {
       ...new Set(
         this.commands.values()
       )
+    ];
+  }
+
+  getCommandNames() {
+    return [
+      ...this.commands.keys()
     ];
   }
 }

@@ -26,7 +26,7 @@ const config = {
 
   bot: {
     name: process.env.BOT_NAME || "ZeroTwo",
-    prefix: process.env.BOT_PREFIX || "!"
+    prefix: process.env.BOT_PREFIX || "."
   },
 
   groq: {
