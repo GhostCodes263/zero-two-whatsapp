@@ -6,6 +6,8 @@ import whatsappClient from "../whatsapp/client.js";
 import zeroTwoStyle from "./style.js";
 import groq from "../ai/groq.js";
 import memory from "../ai/memory.js";
+import database from "../database/database.js";
+import admin from "../security/admin.js";
 
 class BotHandler {
   constructor() {
@@ -57,11 +59,7 @@ class BotHandler {
       text
     } = message;
 
-    if (!chatId) {
-      return;
-    }
-
-    if (!text) {
+    if (!chatId || !text) {
       return;
     }
 
@@ -69,6 +67,35 @@ class BotHandler {
 
     if (!cleanText) {
       return;
+    }
+
+    /*
+     * Block users who are banned from interacting
+     * with Zero Two.
+     */
+    try {
+      if (
+        !admin.isOwner(sender) &&
+        database.isBanned(chatId)
+      ) {
+        logger.warn(
+          {
+            chatId,
+            sender
+          },
+          "Ignoring message from banned user."
+        );
+
+        return;
+      }
+    } catch (error) {
+      logger.error(
+        {
+          chatId,
+          error
+        },
+        "Failed to check user ban status."
+      );
     }
 
     logger.info(
@@ -83,17 +110,41 @@ class BotHandler {
     );
 
     /*
-     * Commands
-     *
-     * Commands always take priority over normal conversation.
+     * Keep basic user information updated.
+     */
+    try {
+      database.upsertUser(
+        chatId,
+        pushName || null
+      );
+    } catch (error) {
+      logger.error(
+        {
+          chatId,
+          error
+        },
+        "Failed to update user record."
+      );
+    }
+
+    /*
+     * Commands always take priority.
      */
     if (cleanText.startsWith(".")) {
       try {
-        const handled = await commandRouter.handle({
-          ...message,
-          text: cleanText,
-          reply: this.sendReply.bind(this)
-        });
+        database.addMessage(
+          chatId,
+          "user",
+          cleanText,
+          true
+        );
+
+        const handled =
+          await commandRouter.handle({
+            ...message,
+            text: cleanText,
+            reply: this.sendReply.bind(this)
+          });
 
         if (handled) {
           logger.debug(
@@ -133,62 +184,58 @@ class BotHandler {
     }
 
     /*
-     * Basic greeting responses.
-     *
-     * Greetings use AI when enabled so Zero Two
-     * can respond naturally while remembering context.
-     */
-    const normalizedText =
-      cleanText.toLowerCase();
-
-    const isGreeting =
-      normalizedText === "hi" ||
-      normalizedText === "hie" ||
-      normalizedText === "hello" ||
-      normalizedText === "hey" ||
-      normalizedText === "hey zero two" ||
-      normalizedText === "hi zero two" ||
-      normalizedText === "hello zero two";
-
-    if (isGreeting) {
-      if (config.features.ai) {
-        const handledByAI =
-          await this.handleAIMessage(
-            chatId,
-            cleanText
-          );
-
-        if (handledByAI) {
-          return;
-        }
-      }
-
-      await this.sendReply(
-        chatId,
-        zeroTwoStyle.greeting(pushName)
-      );
-
-      return;
-    }
-
-    /*
      * Natural AI conversation.
-     *
-     * Any normal message can be answered by Zero Two
-     * when the AI feature is enabled.
      */
     if (config.features.ai) {
-      await this.handleAIMessage(
-        chatId,
-        cleanText
-      );
+      try {
+        const history =
+          memory.getHistory(chatId);
 
-      return;
+        const messages = [
+          ...history,
+          {
+            role: "user",
+            content: cleanText
+          }
+        ];
+
+        const answer =
+          await groq.ask(messages);
+
+        memory.addMessage(
+          chatId,
+          "user",
+          cleanText
+        );
+
+        memory.addMessage(
+          chatId,
+          "assistant",
+          answer
+        );
+
+        await this.sendReply(
+          chatId,
+          zeroTwoStyle.ai(answer)
+        );
+
+        return;
+      } catch (error) {
+        logger.error(
+          {
+            chatId,
+            text: cleanText,
+            error
+          },
+          "Natural AI response failed."
+        );
+
+        return;
+      }
     }
 
     /*
-     * Unknown normal messages currently do nothing
-     * when AI is disabled.
+     * AI disabled.
      */
     logger.debug(
       {
@@ -198,64 +245,6 @@ class BotHandler {
       },
       "No bot handler matched the incoming message."
     );
-  }
-
-  async handleAIMessage(chatId, prompt) {
-    try {
-
-      const history =
-        memory.getHistory(chatId);
-
-      const messages = [
-        ...history,
-        {
-          role: "user",
-          content: prompt
-        }
-      ];
-
-      const answer =
-        await groq.ask(messages);
-
-      memory.addMessage(
-        chatId,
-        "user",
-        prompt
-      );
-
-      memory.addMessage(
-        chatId,
-        "assistant",
-        answer
-      );
-
-      await this.sendReply(
-        chatId,
-        zeroTwoStyle.ai(answer)
-      );
-
-      return true;
-    } catch (error) {
-      logger.error(
-        {
-          chatId,
-          prompt,
-          error
-        },
-        "AI response failed."
-      );
-
-      /*
-       * AI failures should still feel like Zero Two,
-       * not like a raw technical error.
-       */
-      await this.sendReply(
-        chatId,
-        zeroTwoStyle.aiError()
-      );
-
-      return false;
-    }
   }
 
   async sendReply(chatId, text) {

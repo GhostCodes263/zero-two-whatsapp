@@ -1095,6 +1095,38 @@ class WhatsAppClient {
     );
   }
 
+  async removeGroupParticipant(
+    groupId,
+    participantId
+  ) {
+    if (
+      !this.socket ||
+      !this.isConnected
+    ) {
+      throw new Error(
+        "WhatsApp client is not connected."
+      );
+    }
+
+    if (!groupId) {
+      throw new Error(
+        "A group JID is required."
+      );
+    }
+
+    if (!participantId) {
+      throw new Error(
+        "A participant JID is required."
+      );
+    }
+
+    return this.socket.groupParticipantsUpdate(
+      groupId,
+      [participantId],
+      "remove"
+    );
+  }
+
   getSocket() {
     return this.socket;
   }
